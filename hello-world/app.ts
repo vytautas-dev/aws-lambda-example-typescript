@@ -22,9 +22,22 @@ type TInput = {
     key: string;
 };
 
+const createException = (statusCode: number, message: string) => {
+    return {
+        statusCode,
+        body: JSON.stringify({
+            message,
+        }),
+    };
+};
+
 export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
         const { username, bucket, key }: TInput = JSON.parse(event.body as string);
+
+        if (!username || !bucket || !key) {
+            return createException(400, 'Missing required fields (username, bucket, or key).');
+        }
 
         const filename = key.substring(key.lastIndexOf('/') + 1);
 
@@ -65,7 +78,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
             })
             .catch((err) => {
                 console.log('err: ', err);
-                throw err;
+                return createException(500, 'Internal Server Error');
             });
 
         await S3client.getObject({
@@ -74,8 +87,12 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         })
             .promise()
             .then(async (data) => {
-                await fs.promises.writeFile('/tmp/output.docx', data.Body! as NodeJS.ArrayBufferView);
-                console.log('File downloaded successfully.');
+                if (data.Body instanceof Buffer) {
+                    await fs.promises.writeFile('/tmp/output.docx', data.Body);
+                    console.log('File downloaded successfully.');
+                } else {
+                    console.error('Invalid data.Body type. Expected Buffer.');
+                }
             })
             .catch((err) => {
                 console.log('err: ', err);
@@ -83,13 +100,7 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
             });
 
         if (!canBeConvertedToPDF('output.docx')) {
-            console.log('File cant be converted');
-            return {
-                statusCode: 400,
-                body: JSON.stringify({
-                    message: 'File cannot be converted to PDF!',
-                }),
-            };
+            return createException(400, 'File cannot be converted to PDF!');
         }
 
         // convert & return
@@ -107,9 +118,13 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
                 console.log('File uploaded successfully.');
             })
             .catch((err) => {
-                console.log('err: ', err);
-                throw err;
+                console.log(err);
+                return createException(500, 'Internal Server Error');
             });
+
+        // remove local files
+        await fs.promises.unlink('../../tmp/output.pdf');
+        await fs.promises.unlink('../../tmp/input.docx');
 
         return {
             statusCode: 200,
@@ -119,11 +134,6 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         };
     } catch (err) {
         console.log(err);
-        return {
-            statusCode: 500,
-            body: JSON.stringify({
-                message: 'Internal Server Error',
-            }),
-        };
+        return createException(500, 'Internal Server Error');
     }
 };
