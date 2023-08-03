@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import * as fs from 'fs';
-import { S3 } from 'aws-sdk';
+import AWS, { S3 } from 'aws-sdk';
 import { canBeConvertedToPDF, convertTo } from '@shelf/aws-lambda-libreoffice';
 import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
@@ -122,9 +122,30 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
                 return createException(500, 'Internal Server Error');
             });
 
+        const payload = {
+            args: ['--files=1.pdf,2.pdf', '--outdir=/tmp/', '--filename=test.pdf', '--bucket=00vytautas'],
+        };
+
+        const lambda = new AWS.Lambda({
+            apiVersion: '2015-03-31',
+            endpoint: 'http://192.168.100.45:3001',
+            sslEnabled: false,
+        });
+
+        const params = {
+            FunctionName: 'Merger',
+            InvocationType: 'RequestResponse',
+            Payload: JSON.stringify(payload),
+        };
+
+        const response = await lambda.invoke(params).promise();
+        const parsedResponse = JSON.parse(response.Payload as string);
+
+        console.log('response', parsedResponse);
+
         // remove local files
-        await fs.promises.unlink('../../tmp/output.pdf');
-        await fs.promises.unlink('../../tmp/input.docx');
+        // await fs.promises.unlink('../../tmp/output.pdf');
+        // await fs.promises.unlink('../../tmp/input.docx');
 
         return {
             statusCode: 200,
