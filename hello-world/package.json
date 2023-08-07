@@ -11,7 +11,8 @@
     "aws-sdk": "^2.1423.0",
     "docxtemplater": "^3.37.12",
     "esbuild": "^0.14.14",
-    "pizzip": "^3.1.4"
+    "pizzip": "^3.1.4",
+    "uuidv4": "^6.2.13"
   },
   "scripts": {
     "unit": "jest",

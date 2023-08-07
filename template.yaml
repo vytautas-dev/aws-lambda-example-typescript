@@ -64,7 +64,7 @@ Globals:
     MemorySize: 3008
 
 Resources:
-  HelloWorldFunction:
+  Filler:
     Type: AWS::Serverless::Function
     Properties:
       PackageType: Image
