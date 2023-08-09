@@ -1,10 +1,10 @@
-import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import { APIGatewayProxyResult } from 'aws-lambda';
 import * as fs from 'fs/promises';
-import AWS, { S3 } from 'aws-sdk';
+import { S3 } from 'aws-sdk';
 import { canBeConvertedToPDF, convertTo } from '@shelf/aws-lambda-libreoffice';
-import PizZip, { LoadData } from 'pizzip';
+import PizZip from 'pizzip';
 import Docxtemplater from 'docxtemplater';
-import { uuid } from 'uuidv4';
+import { TEventInput } from './types';
 
 const S3client = new S3({
     credentials: {
@@ -17,13 +17,6 @@ const S3client = new S3({
     correctClockSkew: true,
 });
 
-type TInput = {
-    name: string;
-    token: string;
-    bucketName: string;
-    inputDocxName: string;
-};
-
 const createException = (statusCode: number, message: string) => {
     return {
         statusCode,
@@ -33,26 +26,14 @@ const createException = (statusCode: number, message: string) => {
     };
 };
 
-export const lambdaHandler = async (event: TInput): Promise<APIGatewayProxyResult> => {
+export const lambdaHandler = async (event: TEventInput): Promise<APIGatewayProxyResult> => {
     try {
-        const { name, token, bucketName, inputDocxName }: TInput = event;
-        const outputFile = uuid();
+        const { document, fileID, templateBody, bucketName } = event;
 
-        if (!name || !token || !bucketName || !inputDocxName) {
-            return createException(400, 'Missing required fields.');
-        }
-
-        const inputConfig = {
-            Key: inputDocxName,
-            Bucket: bucketName,
-        };
-
-        const inputFile = await S3client.getObject(inputConfig).promise();
-        console.log(`<----- File ${inputDocxName} downloaded ----->`);
-
+        console.log('document.dataToFill', JSON.stringify(document.dataToFill));
 
         //zip the content
-        const zip = new PizZip(inputFile.Body as LoadData);
+        const zip = new PizZip(Buffer.from(templateBody, 'base64'));
 
         // fill the file
         const doc = new Docxtemplater(zip, {
@@ -62,22 +43,22 @@ export const lambdaHandler = async (event: TInput): Promise<APIGatewayProxyResul
             },
             paragraphLoop: true,
             linebreaks: true,
+            nullGetter() {
+                return '';
+            },
         });
 
-        doc.render({
-            name: name || 'John',
-            token: token || 'Great!',
-        });
+        doc.render({ ...document.dataToFill });
 
         const buf = doc.getZip().generate({
             type: 'nodebuffer',
             compression: 'DEFLATE',
         });
 
-        await fs.writeFile(`../../tmp/${outputFile}.docx`, buf);
-        console.log(`<----- File filled and saved as ${outputFile}.docx ----->`);
+        await fs.writeFile(`../../tmp/${fileID}`, buf);
+        console.log(`<----- File filled and saved as ${fileID} ----->`);
 
-        if (!canBeConvertedToPDF(`${outputFile}.docx`)) {
+        if (!canBeConvertedToPDF(fileID)) {
             console.log("<----- Can't convert file to PDF ----->");
             return {
                 statusCode: 400,
@@ -87,12 +68,13 @@ export const lambdaHandler = async (event: TInput): Promise<APIGatewayProxyResul
             };
         }
 
-        await convertTo(`${outputFile}.docx`, 'pdf');
+        await convertTo(fileID, 'pdf');
         console.log('<----- File converted to PDF ----->');
 
-        const outputPDF = await fs.readFile(`../../tmp/${outputFile}.pdf`);
+        const outputPDF = await fs.readFile(`../../tmp/${fileID}.pdf`);
+
         const outputConfig = {
-            Key: `${outputFile}.pdf`,
+            Key: `${fileID}.pdf`,
             Bucket: bucketName,
             Body: outputPDF,
         };
@@ -102,36 +84,19 @@ export const lambdaHandler = async (event: TInput): Promise<APIGatewayProxyResul
             .then(() => {
                 console.log('PDF file uploaded successfully.');
             })
-            .catch(err => {
+            .catch((err) => {
                 console.log('err: ', err);
                 throw err;
             });
 
-        await fs.unlink(`../../tmp/${outputFile}.pdf`);
-        console.log('<----- PDF file deleted from container. ----->');
-
-        S3client.deleteObject(
-            {
-                Bucket: bucketName,
-                Key: inputDocxName,
-            },
-            err => {
-                if (err) {
-                    console.error(`<----- Error deleting file: ${inputDocxName} ${err}`);
-                } else {
-                    console.log(
-                        `<----- ${inputDocxName} file deleted from bucket. ----->`
-                    );
-                }
-            }
-        );
+        const outputFileWithExtension = fileID + document.extension;
 
         return {
             statusCode: 200,
             body: JSON.stringify({
                 function: 'Filler',
-                message: `File converted and saved successfully, converted file: ${outputFile}`,
-                fileName: `${outputFile}.pdf`,
+                message: `File converted and saved successfully, converted file: ${outputFileWithExtension}`,
+                fileName: outputFileWithExtension,
             }),
             headers: { 'content-type': 'application/json' },
         };
